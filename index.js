@@ -20,7 +20,7 @@ import z from '@deepseek-ai/schemastery'
 import sharp from 'sharp'
 
 export const name = 'image-gen'
-export const inject = ['tools', 'attachments', 'webserver']
+export const inject = ['tools', 'attachments', 'webServer']
 
 /** Provider presets shipped with the plugin (name -> base settings). */
 export const PRESETS = {
@@ -488,7 +488,7 @@ export function apply(ctx, config = {}) {
 
   // /dsh-image-gen/models: 前端「获取模型列表」按钮的后端。
   // body: { name, baseURL, apiKey, apiKeyEnv } —— apiKey 明文优先，apiKeyEnv 兜底。
-  ctx.inject(['webserver'], (wctx) => {
+  ctx.inject(['webServer'], (wctx) => {
     wctx.webServer.register({
       kind: 'exact',
       path: '/dsh-image-gen/models',
