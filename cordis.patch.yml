@@ -1,0 +1,5 @@
+# dsh-image-gen bundle layer: inserts the plugin row. Applied automatically
+# when the package is installed (package.json declares dsh.bundle.patch).
+- insert:
+    - id: image-gen
+      name: dsh-image-gen
