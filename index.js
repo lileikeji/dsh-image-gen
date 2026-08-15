@@ -233,6 +233,19 @@ async function resolveApiKey(ctx, provider) {
   return process.env[apiKeyEnv]
 }
 
+/** 生图模型关键词：/models 列表里据此智能挑选图像生成模型。 */
+const IMAGE_MODEL_HINTS = [
+  /image/i, /kolors/i, /flux/i, /t2i/i, /txt2img/i, /draw/i, /seedream/i, /stable-diffusion/i,
+  /dall-e/i, /cogview/i, /wanx/i, /z-image/i, /pixart/i, /sdxl/i, /midjourney/i, /gpt-image/i,
+]
+
+/** 从一个模型 id 列表里挑一个生图模型；挑不到返回 undefined。 */
+export function pickImageModel(models) {
+  if (!Array.isArray(models) || models.length === 0) return undefined
+  const hint = (id) => IMAGE_MODEL_HINTS.some((re) => re.test(String(id)))
+  return models.find(hint) || models.find((id) => /^[^/]+\/[^/]+$/.test(String(id)) && !/embed|rerank|audio|tts|asr|vision|chat|llm/i.test(String(id)))
+}
+
 /** GET {base}/models and return the model id list (OpenAI-compatible). */
 export async function listModels(provider) {
   const baseUrl = String(provider.baseURL ?? '').replace(/\/+$/, '')
@@ -414,7 +427,23 @@ export function apply(ctx, config = {}) {
           const provider = chain[i]
           try {
             const apiKey = await resolveApiKey(ctx, provider)
-            const providerFull = { ...provider, apiKey, timeoutMs: timeoutMs() }
+            // 未显式指定模型：自动拉取该供应商模型列表并挑选生图模型；
+            // 拉取失败或挑不到时回退到默认模型（或保留已配置的 model）。
+            let model = provider.model
+            if (!model) {
+              try {
+                const models = await listModels({ ...provider, apiKey })
+                model = pickImageModel(models)
+              } catch {
+                model = undefined
+              }
+              if (!model) {
+                const preset = PRESETS[provider.name]
+                model = preset ? preset.defaultModel : undefined
+              }
+            }
+            if (!model) throw new Error('未配置模型，且无法自动选择：请为 ' + provider.name + ' 设置 model 或用「获取模型」选择')
+            const providerFull = { ...provider, model, apiKey, timeoutMs: timeoutMs() }
             const img = await generateImage(providerFull, args.prompt, size, exec.signal)
 
             const check = await verifyImageBytes(img.bytes, current())
