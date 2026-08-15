@@ -489,36 +489,39 @@ export function apply(ctx, config = {}) {
   // /dsh-image-gen/models: 前端「获取模型列表」按钮的后端。
   // body: { name, baseURL, apiKey, apiKeyEnv } —— apiKey 明文优先，apiKeyEnv 兜底。
   ctx.inject(['webServer'], (wctx) => {
-    wctx.webServer.register({
-      kind: 'exact',
-      path: '/dsh-image-gen/models',
-      handler: async (request, response) => {
-        response.writeHead(200, { 'content-type': 'application/json' })
-        const send = (status, body) => {
-          response.writeHead(status, { 'content-type': 'application/json' })
-          response.end(JSON.stringify(body))
-        }
-        if (request.method !== 'POST') { send(405, { error: 'POST only' }); return }
-        let body = {}
-        try {
-          let raw = ''
-          for await (const chunk of request) raw += chunk
-          body = JSON.parse(raw || '{}')
-        } catch { send(400, { error: 'invalid JSON body' }); return }
-        const name = String(body.name ?? '')
-        const baseURL = String(body.baseURL ?? '')
-        const apiKey = String(body.apiKey ?? '')
-        const apiKeyEnv = String(body.apiKeyEnv ?? '')
-        if (!baseURL) { send(400, { error: 'baseURL required' }); return }
-        try {
-          const models = await listModels({ name: name || 'custom', baseURL, apiKey, apiKeyEnv })
-          send(200, { ok: true, models })
-        } catch (error) {
-          send(502, { ok: false, error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    })
-    wctx.effect(() => () => { /* disposed with the plugin */ }, 'image-gen: models route')
+    const disposers = [
+      wctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-image-gen/models',
+        handler: async (request, response) => {
+          const send = (status, body) => {
+            response.writeHead(status, { 'content-type': 'application/json' })
+            response.end(JSON.stringify(body))
+          }
+          if (request.method !== 'POST') { send(405, { error: 'POST only' }); return }
+          let body = {}
+          try {
+            let raw = ''
+            for await (const chunk of request) raw += chunk
+            body = JSON.parse(raw || '{}')
+          } catch { send(400, { error: 'invalid JSON body' }); return }
+          const name = String(body.name ?? '')
+          const baseURL = String(body.baseURL ?? '')
+          const apiKey = String(body.apiKey ?? '')
+          const apiKeyEnv = String(body.apiKeyEnv ?? '')
+          if (!baseURL) { send(400, { error: 'baseURL required' }); return }
+          try {
+            const models = await listModels({ name: name || 'custom', baseURL, apiKey, apiKeyEnv })
+            send(200, { ok: true, models })
+          } catch (error) {
+            send(502, { ok: false, error: error instanceof Error ? error.message : String(error) })
+          }
+        },
+      }),
+    ]
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
   })
 }
 
