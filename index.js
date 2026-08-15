@@ -20,7 +20,7 @@ import z from '@deepseek-ai/schemastery'
 import sharp from 'sharp'
 
 export const name = 'image-gen'
-export const inject = ['tools', 'attachments']
+export const inject = ['tools', 'attachments', 'webserver']
 
 /** Provider presets shipped with the plugin (name -> base settings). */
 export const PRESETS = {
@@ -74,6 +74,7 @@ export const Config = z.object({
         name: z.string(),
         baseURL: z.string(),
         model: z.string(),
+        apiKey: z.string().default(''),
         apiKeyEnv: z.string().default(''),
         size: z.string().default('1024x1024'),
       }),
@@ -213,7 +214,11 @@ export async function verifyImageBytes(bytes, config) {
 }
 
 /** Resolve an API key from the credentials service (env reference) or env. */
-async function resolveApiKey(ctx, apiKeyEnv) {
+async function resolveApiKey(ctx, provider) {
+  // 优先使用配置里直接填写的密钥，其次按 apiKeyEnv 从 credentials/.env 解析。
+  if (typeof provider === 'string') provider = { apiKeyEnv: provider }
+  if (provider.apiKey && String(provider.apiKey).trim() !== '') return String(provider.apiKey).trim()
+  const apiKeyEnv = provider.apiKeyEnv
   if (!apiKeyEnv) return undefined
   const credentials = ctx.get('credentials')
   if (credentials !== undefined) {
@@ -226,6 +231,28 @@ async function resolveApiKey(ctx, apiKeyEnv) {
     }
   }
   return process.env[apiKeyEnv]
+}
+
+/** GET {base}/models and return the model id list (OpenAI-compatible). */
+export async function listModels(provider) {
+  const baseUrl = String(provider.baseURL ?? '').replace(/\/+$/, '')
+  const apiKey = provider.apiKey && String(provider.apiKey).trim() !== '' ? String(provider.apiKey).trim() : provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined
+  if (!apiKey) throw new Error('no API key configured for ' + provider.name)
+  const response = await fetch(baseUrl + '/models', {
+    headers: apiKey ? { Authorization: 'Bearer ' + apiKey } : {},
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error('GET /models ' + response.status + ': ' + readableApiError(body))
+  }
+  const data = await response.json().catch(() => undefined)
+  const list = Array.isArray(data?.data)
+    ? data.data.map((row) => typeof row === 'string' ? row : row?.id).filter(Boolean)
+    : Array.isArray(data?.models)
+      ? data.models.map((row) => typeof row === 'string' ? row : row?.id).filter(Boolean)
+      : []
+  return [...new Set(list)]
 }
 
 /** Ask one OpenAI-compatible vision endpoint whether the image rendered correctly. */
@@ -386,7 +413,7 @@ export function apply(ctx, config = {}) {
         for (let i = 0; i < Math.min(chain.length, attempts); i++) {
           const provider = chain[i]
           try {
-            const apiKey = await resolveApiKey(ctx, provider.apiKeyEnv)
+            const apiKey = await resolveApiKey(ctx, provider)
             const providerFull = { ...provider, apiKey, timeoutMs: timeoutMs() }
             const img = await generateImage(providerFull, args.prompt, size, exec.signal)
 
@@ -401,7 +428,7 @@ export function apply(ctx, config = {}) {
               const vProviders = await verifyProvidersOf()
               for (const vp of vProviders) {
                 try {
-                  const vKey = await resolveApiKey(ctx, vp.apiKeyEnv)
+                  const vKey = await resolveApiKey(ctx, vp)
                   if (!vKey) continue
                   const verdict = await verifyWithVision(
                     { ...vp, apiKey: vKey, timeoutMs: timeoutMs() },
@@ -458,6 +485,41 @@ export function apply(ctx, config = {}) {
       },
     })
   }
+
+  // /dsh-image-gen/models: 前端「获取模型列表」按钮的后端。
+  // body: { name, baseURL, apiKey, apiKeyEnv } —— apiKey 明文优先，apiKeyEnv 兜底。
+  ctx.inject(['webserver'], (wctx) => {
+    wctx.webServer.register({
+      kind: 'exact',
+      path: '/dsh-image-gen/models',
+      handler: async (request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        const send = (status, body) => {
+          response.writeHead(status, { 'content-type': 'application/json' })
+          response.end(JSON.stringify(body))
+        }
+        if (request.method !== 'POST') { send(405, { error: 'POST only' }); return }
+        let body = {}
+        try {
+          let raw = ''
+          for await (const chunk of request) raw += chunk
+          body = JSON.parse(raw || '{}')
+        } catch { send(400, { error: 'invalid JSON body' }); return }
+        const name = String(body.name ?? '')
+        const baseURL = String(body.baseURL ?? '')
+        const apiKey = String(body.apiKey ?? '')
+        const apiKeyEnv = String(body.apiKeyEnv ?? '')
+        if (!baseURL) { send(400, { error: 'baseURL required' }); return }
+        try {
+          const models = await listModels({ name: name || 'custom', baseURL, apiKey, apiKeyEnv })
+          send(200, { ok: true, models })
+        } catch (error) {
+          send(502, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    })
+    wctx.effect(() => () => { /* disposed with the plugin */ }, 'image-gen: models route')
+  })
 }
 
 // 默认导出：兼容 ESM/CJS 互操作。
