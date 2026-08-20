@@ -18,6 +18,7 @@
 
 import z from '@deepseek-ai/schemastery'
 import sharp from 'sharp'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 
 export const name = 'image-gen'
 export const inject = ['tools', 'attachments', 'webServer']
@@ -329,15 +330,9 @@ export function apply(ctx, config = {}) {
     return Number.isFinite(value) && value > 0 ? value : 120000
   }
 
-  ctx.inject(['settings'], (sctx) => {
-    const scope = sctx.settings.register('image-gen', Config, { base: config })
-    current = () => scope.get()
-    sctx.effect(
-      () => () => {
-        current = () => config
-      },
-      'image-gen: settings fallback',
-    )
+  installSettingsSection(ctx, settingsNamespace('image-gen'), Config, config, {
+    setSource: (source) => { current = source },
+    onChange: () => {},
   })
 
   if (config.tool !== false) {

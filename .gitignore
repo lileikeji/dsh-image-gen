@@ -8,3 +8,5 @@ coverage/
 .credentials.yaml
 .dsh/
 pnpm-workspace.yaml
+
+*.bak
